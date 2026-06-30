@@ -1,0 +1,12 @@
+[
+  {
+    "sku": "demo-1",
+    "store": "amazon",
+    "url": "https://www.amazon.in"
+  },
+  {
+    "sku": "demo-2",
+    "store": "flipkart",
+    "url": "https://www.flipkart.com"
+  }
+]

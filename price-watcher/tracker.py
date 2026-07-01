@@ -4,16 +4,21 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
+from datetime import datetime
 
 from dotenv import load_dotenv
 from playwright.async_api import Page, async_playwright
 
-from events import build_price_event
+from events import PriceEvent, build_price_event
 from notifier import TelegramNotifier
 from scrapers import BaseScraper, ScrapedProduct, get_scraper_for_url
 from state_store import StateStore
 from utils import retry_with_backoff
+
+# Timezone used to decide when a new day starts for the once-daily summary.
+SUMMARY_TIMEZONE = ZoneInfo("Asia/Kolkata")
 
 load_dotenv()
 
@@ -60,10 +65,13 @@ async def process_product(
     product: Dict[str, Any],
     state_store: StateStore,
     notifier: TelegramNotifier,
-) -> None:
+) -> Optional[PriceEvent]:
     """Run one product through the pipeline:
 
     Marketplace Resolver -> Scraper -> Price Event -> Notifier -> State Store
+
+    Returns the PriceEvent on success (used to build the daily summary), or
+    None if the product couldn't be scraped this run.
     """
     url = product["url"]
     name = product.get("name") or url
@@ -73,14 +81,14 @@ async def process_product(
     scraper = get_scraper_for_url(url)
     if scraper is None:
         logger.warning("No scraper registered for URL: %s", url)
-        return
+        return None
 
     # Scraper
     try:
         scraped = await scrape_with_retry(scraper, page, url)
     except Exception:
         logger.exception("Giving up on '%s' after %d attempts", name, RETRY_ATTEMPTS)
-        return
+        return None
 
     logger.info(
         "Scraped '%s' via %s: price=%s, in_stock=%s, title=%r",
@@ -108,6 +116,8 @@ async def process_product(
         price=scraped.price,
         in_stock=scraped.in_stock,
     )
+
+    return event
 
 
 async def track_prices() -> None:
@@ -151,6 +161,7 @@ async def track_prices() -> None:
         )
         page = await context.new_page()
 
+        events: List[PriceEvent] = []
         try:
             # Products are scraped one at a time on a shared page, with a
             # pause between each, to keep traffic to each marketplace low.
@@ -160,10 +171,21 @@ async def track_prices() -> None:
             for index, product in enumerate(products):
                 if index > 0:
                     await asyncio.sleep(DELAY_BETWEEN_PRODUCTS_SECONDS)
-                await process_product(page, product, state_store, notifier)
+                event = await process_product(page, product, state_store, notifier)
+                if event is not None:
+                    events.append(event)
         finally:
             await context.close()
             await browser.close()
+
+    # Once-a-day digest of every product's current price/availability, on
+    # top of handle()'s change-triggered alerts. Only claims today's slot
+    # if we actually have something to report, so a run where every scrape
+    # failed doesn't burn the day's summary for a later, successful run.
+    today = datetime.now(SUMMARY_TIMEZONE).date().isoformat()
+    if events and state_store.get_last_daily_summary_date() != today:
+        await notifier.send_daily_summary(events)
+        state_store.set_last_daily_summary_date(today)
 
     state_store.save()
     logger.info("Tracking run complete (%d product(s) processed)", len(products))

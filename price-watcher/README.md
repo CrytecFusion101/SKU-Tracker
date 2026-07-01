@@ -55,6 +55,12 @@ State Store             (state_store.py)
 6. **State Store** — `state_store.py` records the latest scrape result for
    next run, independent of whether the notifier fired.
 
+In addition to change-triggered alerts, once per calendar day (Asia/Kolkata)
+`tracker.py` sends a **daily summary** listing every product's current
+price and availability, regardless of whether anything changed. The date
+of the last summary is stored in `state.json` so re-running the tracker
+multiple times in a day doesn't repeat it.
+
 ## Project structure
 
 ```

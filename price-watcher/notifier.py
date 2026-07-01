@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Optional
+from typing import List, Optional
 
 import requests
 
@@ -46,6 +46,26 @@ class TelegramNotifier:
             logger.info("Telegram notification sent for %s", event.product)
         except Exception:
             logger.exception("Failed to send Telegram notification for %s", event.product)
+
+    async def send_daily_summary(self, events: List[PriceEvent]) -> None:
+        """Send one digest per day covering every product's current price
+        and availability, regardless of whether anything changed. This is
+        separate from handle()'s change-triggered alerts -- it's a
+        "here's where things stand" check-in rather than a notable event.
+        """
+        if not events:
+            return
+
+        if not self.is_configured:
+            logger.warning("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set; skipping daily summary")
+            return
+
+        message = self._format_daily_summary(events)
+        try:
+            await asyncio.to_thread(self._send, message)
+            logger.info("Daily summary sent for %d product(s)", len(events))
+        except Exception:
+            logger.exception("Failed to send daily summary")
 
     def _send(self, message: str) -> None:
         """Blocking HTTP call to the Telegram Bot API; run via asyncio.to_thread."""
@@ -97,3 +117,20 @@ class TelegramNotifier:
         lines.append(event.url)
 
         return "\n".join(lines)
+
+    def _format_daily_summary(self, events: List[PriceEvent]) -> str:
+        """Build the once-a-day digest: current price/availability per product."""
+        lines = ["<b>Price Watcher — Daily Summary</b>", ""]
+
+        for event in events:
+            status = "In Stock" if event.new_in_stock else "Out of Stock"
+            price_str = f"₹{event.new_price:,.2f}" if event.new_price is not None else "Unavailable"
+
+            lines.append(f"<b>{event.product}</b> ({event.marketplace})")
+            lines.append(f"Price: {price_str} | {status}")
+            if event.target_price is not None:
+                lines.append(f"Target: ₹{event.target_price:,.2f}")
+            lines.append(event.url)
+            lines.append("")
+
+        return "\n".join(lines).rstrip()

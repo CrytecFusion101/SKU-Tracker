@@ -7,6 +7,11 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Reserved key for cross-cutting metadata (e.g. last daily summary date),
+# stored alongside the per-URL entries. Safe from collisions since product
+# URLs always start with "https://".
+_META_KEY = "__meta__"
+
 
 class StateStore:
     """Persists last-known scrape results to a JSON file, keyed by product URL.
@@ -44,6 +49,14 @@ class StateStore:
     ) -> None:
         """Record the latest scrape result for a product URL."""
         self._data[url] = {"name": name, "title": title, "price": price, "in_stock": in_stock}
+
+    def get_last_daily_summary_date(self) -> Optional[str]:
+        """Return the ISO date (YYYY-MM-DD) the daily summary last went out."""
+        return self._data.get(_META_KEY, {}).get("last_daily_summary_date")
+
+    def set_last_daily_summary_date(self, date_str: str) -> None:
+        """Record that the daily summary was sent for the given ISO date."""
+        self._data.setdefault(_META_KEY, {})["last_daily_summary_date"] = date_str
 
     def save(self) -> None:
         """Flush all recorded state to disk."""

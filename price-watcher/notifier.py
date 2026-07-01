@@ -78,59 +78,50 @@ class TelegramNotifier:
         response.raise_for_status()
 
     def _format_message(self, event: PriceEvent) -> str:
-        """Build the Telegram message body in the required notification format."""
-        lines = [
-            f"<b>{event.product}</b>",
-            f"Marketplace: {event.marketplace}",
-            "",
-        ]
+        """Build the Telegram message body for a change-triggered alert."""
+        lines = [f"📦 <b>{event.product}</b>", f"🏬 {event.marketplace}", ""]
 
-        if event.old_price is not None:
-            lines.append(f"Old Price: ₹{event.old_price:,.2f}")
+        if event.new_price is None:
+            lines.append("💰 Price unavailable")
+        elif event.old_price is None:
+            lines.append(f"💰 ₹{event.new_price:,.0f}")
         else:
-            lines.append("Old Price: N/A (first time tracked)")
-
-        if event.new_price is not None:
-            lines.append(f"New Price: ₹{event.new_price:,.2f}")
-        else:
-            lines.append("New Price: Unavailable")
-
-        if event.old_price is not None and event.new_price is not None:
+            lines.append(f"💰 ₹{event.old_price:,.0f} → ₹{event.new_price:,.0f}")
             diff = event.new_price - event.old_price
-            if diff > 0:
-                direction = "increased"
-            elif diff < 0:
-                direction = "decreased"
-            else:
-                direction = "unchanged"
-            lines.append(f"Difference: ₹{abs(diff):,.2f} ({direction})")
+            if diff:
+                pct = abs(diff) / event.old_price * 100 if event.old_price else 0
+                arrow, verb = ("📉", "cheaper") if diff < 0 else ("📈", "pricier")
+                lines.append(f"{arrow} ₹{abs(diff):,.0f} {verb} ({pct:.1f}%)")
 
         if event.old_in_stock is not None and event.old_in_stock != event.new_in_stock:
-            status = "In Stock" if event.new_in_stock else "Out of Stock"
-            lines.append(f"Stock status changed: {status}")
+            stock_emoji = "🟢" if event.new_in_stock else "🔴"
+            stock_text = "In Stock" if event.new_in_stock else "Out of Stock"
+            lines.append("")
+            lines.append(f"🔄 Stock: {stock_emoji} {stock_text}")
 
         if event.target_hit and event.target_price is not None:
             lines.append("")
-            lines.append(f"Target reached! (Target: ₹{event.target_price:,.2f})")
+            lines.append(f"🎯 Target Reached! (₹{event.target_price:,.0f})")
 
         lines.append("")
-        lines.append(event.url)
+        lines.append(f'🔗 <a href="{event.url}">Link</a>')
 
         return "\n".join(lines)
 
     def _format_daily_summary(self, events: List[PriceEvent]) -> str:
         """Build the once-a-day digest: current price/availability per product."""
-        lines = ["<b>Price Watcher — Daily Summary</b>", ""]
+        lines = ["📊 <b>Price Watcher — Daily Summary</b>", ""]
 
         for event in events:
-            status = "In Stock" if event.new_in_stock else "Out of Stock"
-            price_str = f"₹{event.new_price:,.2f}" if event.new_price is not None else "Unavailable"
+            stock_emoji = "🟢" if event.new_in_stock else "🔴"
+            stock_text = "In Stock" if event.new_in_stock else "Out of Stock"
+            price_str = f"₹{event.new_price:,.0f}" if event.new_price is not None else "Unavailable"
 
-            lines.append(f"<b>{event.product}</b> ({event.marketplace})")
-            lines.append(f"Price: {price_str} | {status}")
+            lines.append(f"📦 <b>{event.product}</b> ({event.marketplace})")
+            lines.append(f"💰 {price_str} | {stock_emoji} {stock_text}")
             if event.target_price is not None:
-                lines.append(f"Target: ₹{event.target_price:,.2f}")
-            lines.append(event.url)
+                lines.append(f"🎯 Target: ₹{event.target_price:,.0f}")
+            lines.append(f'🔗 <a href="{event.url}">Link</a>')
             lines.append("")
 
         return "\n".join(lines).rstrip()

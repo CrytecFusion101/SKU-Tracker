@@ -81,6 +81,11 @@ async def process_product(
         logger.exception("Giving up on '%s' after %d attempts", name, RETRY_ATTEMPTS)
         return
 
+    logger.info(
+        "Scraped '%s' via %s: price=%s, in_stock=%s, title=%r",
+        name, scraper.marketplace_name, scraped.price, scraped.in_stock, scraped.title,
+    )
+
     # Price Event
     event = build_price_event(
         product_name=name,

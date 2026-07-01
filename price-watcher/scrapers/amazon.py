@@ -17,6 +17,7 @@ class AmazonScraper(BaseScraper):
 
     marketplace_name = "Amazon"
     domains = ("amazon.in", "amazon.com")
+    hides_price_when_out_of_stock = True
 
     # Amazon renders the price in different DOM shapes depending on deal
     # type (buy box, lightning deal, coupon, etc). Selectors are tried in

@@ -30,10 +30,12 @@ class FlipkartScraper(BaseScraper):
         "div._30jeq3._16Jk6d",
         "div._30jeq3",
     )
-    _OUT_OF_STOCK_SELECTORS = (
-        "div._16FRp0",
-        "div.Z8JjpR",
-    )
+
+    # A product's price stays visible on Flipkart even when it can't be
+    # bought right now (e.g. "NOTIFY ME" instead of a real out-of-stock
+    # message), so treat availability as "can this actually be purchased"
+    # rather than trying to enumerate every unavailability message.
+    _BUY_BUTTON_PATTERN = re.compile(r"add to cart|buy now", re.IGNORECASE)
 
     # Timeout for calls made after _wait_for_content already gave the page
     # a chance to settle -- avoids stacking another full default timeout
@@ -106,16 +108,12 @@ class FlipkartScraper(BaseScraper):
         return None
 
     async def _extract_availability(self, page: Page) -> bool:
-        for selector in self._OUT_OF_STOCK_SELECTORS:
-            try:
-                locator = page.locator(selector).first
-                if await locator.count() > 0:
-                    text = (await locator.text_content(timeout=self._FAST_TIMEOUT_MS) or "").strip().lower()
-                    if "sold out" in text or "out of stock" in text or "coming soon" in text:
-                        return False
-            except Exception:
-                continue
-        return True
+        try:
+            buy_button = page.get_by_role("button", name=self._BUY_BUTTON_PATTERN)
+            return await buy_button.count() > 0
+        except Exception:
+            logger.warning("Could not determine Flipkart buy-button availability")
+            return True
 
     def shorten_url(self, url: str) -> str:
         """Keep the path plus `pid` (it selects the specific color/storage

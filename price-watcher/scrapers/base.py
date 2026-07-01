@@ -45,6 +45,14 @@ class BaseScraper(ABC):
     #: Domain fragments used to auto-detect this scraper from a product URL.
     domains: Tuple[str, ...] = ()
 
+    #: Whether this marketplace hides the price entirely once a product is
+    #: out of stock. Amazon does (no buybox price at all, so any selector
+    #: match found while out of stock is noise from an unrelated
+    #: recommendation widget elsewhere on the page). Flipkart doesn't -- it
+    #: keeps showing the price next to a "Notify Me" button -- so leave this
+    #: False there and let _extract_price run normally either way.
+    hides_price_when_out_of_stock: bool = False
+
     async def scrape(self, page: Page, url: str) -> ScrapedProduct:
         """Navigate to the product URL and return normalized product data."""
         await page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -53,12 +61,10 @@ class BaseScraper(ABC):
         title = await self._extract_title(page)
         in_stock = await self._extract_availability(page)
 
-        # Genuinely out-of-stock listings often show no buybox price at all,
-        # so don't even look for one -- any match found by a generic price
-        # selector at that point is almost certainly noise from an unrelated
-        # recommendation/carousel widget elsewhere on the page, not this
-        # product's price.
-        price = await self._extract_price(page) if in_stock else None
+        if not in_stock and self.hides_price_when_out_of_stock:
+            price = None
+        else:
+            price = await self._extract_price(page)
 
         if price is None and in_stock:
             # Missing price while the page claims the product is in stock is

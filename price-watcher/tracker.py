@@ -120,12 +120,28 @@ async def track_prices() -> None:
         )
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        # Amazon/Flipkart bot-check on obvious automation fingerprints, so
+        # the launch/context options below aim to look like a normal desktop
+        # Chrome session (real viewport, locale/timezone, no automation
+        # banner, no navigator.webdriver flag) rather than a bare headless
+        # browser. This reduces false positives but is not a guarantee --
+        # sophisticated bot detection may still block datacenter IPs outright.
+        browser = await playwright.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         context = await browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            )
+            ),
+            viewport={"width": 1366, "height": 768},
+            locale="en-IN",
+            timezone_id="Asia/Kolkata",
+            extra_http_headers={"Accept-Language": "en-IN,en;q=0.9"},
+        )
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
         page = await context.new_page()
 

@@ -59,6 +59,7 @@ class BaseScraper(ABC):
             # product is genuinely priceless. Treat it as a failed scrape so
             # retry_with_backoff retries and the tracker skips persisting
             # this result, rather than committing junk to state.json.
+            await self._log_page_diagnostics(page, url)
             raise ScrapeError(f"{self.marketplace_name}: could not extract a price from {url}")
 
         return ScrapedProduct(title=title, price=price, in_stock=in_stock)
@@ -66,6 +67,25 @@ class BaseScraper(ABC):
     async def _wait_for_content(self, page: Page) -> None:
         """Optional hook subclasses can override to wait for dynamic content."""
         return None
+
+    async def _log_page_diagnostics(self, page: Page, url: str) -> None:
+        """Best-effort logging of what actually rendered on a failed scrape.
+
+        Once this runs on a remote host (e.g. Railway) there's no way to
+        inspect the page directly, so a failure needs to be tellable apart
+        -- from the logs alone -- as a bot-check/captcha page versus a
+        genuine site layout change.
+        """
+        try:
+            page_title = await page.title()
+            body_text = await page.locator("body").inner_text(timeout=5000)
+            snippet = " ".join(body_text.split())[:300]
+            logger.warning(
+                "%s diagnostic for %s -- page title: %r, body snippet: %r",
+                self.marketplace_name, url, page_title, snippet,
+            )
+        except Exception:
+            logger.warning("%s diagnostic capture failed for %s", self.marketplace_name, url)
 
     @abstractmethod
     async def _extract_title(self, page: Page) -> str:

@@ -15,12 +15,18 @@ async def retry_with_backoff(
     retries: int = 3,
     base_delay: float = 2.0,
     label: str = "operation",
+    should_retry: Optional[Callable[[Exception], bool]] = None,
 ) -> T:
     """Run an async callable, retrying on failure with exponential backoff.
 
     Waits base_delay * 2**attempt seconds between attempts (2s, 4s, 8s, ...
     for the default base_delay). Re-raises the final exception once all
     retries are exhausted so the caller can decide how to handle it.
+
+    `should_retry`, if given, is checked after each failure; returning False
+    stops retrying immediately (e.g. a connection-level block is very
+    unlikely to clear within the same run, so burning the remaining
+    attempts and their backoff delays just wastes time).
     """
     last_exc: Optional[Exception] = None
     for attempt in range(1, retries + 1):
@@ -29,6 +35,9 @@ async def retry_with_backoff(
         except Exception as exc:
             last_exc = exc
             logger.warning("%s failed (attempt %d/%d): %s", label, attempt, retries, exc)
+            if should_retry is not None and not should_retry(exc):
+                logger.warning("%s: not retrying further (non-retryable failure)", label)
+                break
             if attempt < retries:
                 delay = base_delay * (2 ** (attempt - 1))
                 await asyncio.sleep(delay)

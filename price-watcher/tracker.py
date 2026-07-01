@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from zoneinfo import ZoneInfo
 from datetime import datetime
 
@@ -46,6 +46,17 @@ def load_products() -> List[Dict[str, Any]]:
         return json.load(handle)
 
 
+def is_connection_error(exc: Exception) -> bool:
+    """True for a browser-level connection failure (net::ERR_*), as opposed
+    to a page loading but not containing what we expected. A connection
+    error means the site is unreachable outright (e.g. a rate-based IP
+    block) -- retrying immediately within the same run is very unlikely to
+    succeed, so it isn't worth burning the usual retry attempts and backoff
+    delays on it.
+    """
+    return "net::ERR_" in str(exc)
+
+
 async def scrape_with_retry(scraper: BaseScraper, page: Page, url: str) -> ScrapedProduct:
     """Run a scraper's scrape() with exponential-backoff retries."""
 
@@ -57,6 +68,7 @@ async def scrape_with_retry(scraper: BaseScraper, page: Page, url: str) -> Scrap
         retries=RETRY_ATTEMPTS,
         base_delay=RETRY_BASE_DELAY_SECONDS,
         label=f"scrape[{scraper.marketplace_name}] {url}",
+        should_retry=lambda exc: not is_connection_error(exc),
     )
 
 
@@ -65,6 +77,7 @@ async def process_product(
     product: Dict[str, Any],
     state_store: StateStore,
     notifier: TelegramNotifier,
+    blocked_marketplaces: Set[str],
 ) -> Optional[PriceEvent]:
     """Run one product through the pipeline:
 
@@ -83,10 +96,27 @@ async def process_product(
         logger.warning("No scraper registered for URL: %s", url)
         return None
 
+    if scraper.marketplace_name in blocked_marketplaces:
+        # Once one product on a marketplace fails with a connection-level
+        # error this run, further attempts almost certainly will too --
+        # skip immediately rather than spending another ~2 minutes on a
+        # doomed retry loop for every remaining product on that site.
+        logger.warning(
+            "Skipping '%s' -- %s appeared connection-blocked earlier this run",
+            name, scraper.marketplace_name,
+        )
+        return None
+
     # Scraper
     try:
         scraped = await scrape_with_retry(scraper, page, url)
-    except Exception:
+    except Exception as exc:
+        if is_connection_error(exc):
+            logger.error(
+                "%s appears connection-blocked this run; skipping its remaining products",
+                scraper.marketplace_name,
+            )
+            blocked_marketplaces.add(scraper.marketplace_name)
         logger.exception("Giving up on '%s' after %d attempts", name, RETRY_ATTEMPTS)
         return None
 
@@ -163,6 +193,7 @@ async def track_prices() -> None:
         page = await context.new_page()
 
         events: List[PriceEvent] = []
+        blocked_marketplaces: Set[str] = set()
         try:
             # Products are scraped one at a time on a shared page, with a
             # pause between each, to keep traffic to each marketplace low.
@@ -172,7 +203,7 @@ async def track_prices() -> None:
             for index, product in enumerate(products):
                 if index > 0:
                     await asyncio.sleep(DELAY_BETWEEN_PRODUCTS_SECONDS)
-                event = await process_product(page, product, state_store, notifier)
+                event = await process_product(page, product, state_store, notifier, blocked_marketplaces)
                 if event is not None:
                     events.append(event)
         finally:

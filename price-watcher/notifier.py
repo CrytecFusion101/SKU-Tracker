@@ -72,7 +72,12 @@ class TelegramNotifier:
         url = TELEGRAM_API_URL.format(token=self.bot_token)
         response = requests.post(
             url,
-            json={"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"},
+            json={
+                "chat_id": self.chat_id,
+                "text": message,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
             timeout=10,
         )
         response.raise_for_status()

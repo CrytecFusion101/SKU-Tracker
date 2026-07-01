@@ -30,20 +30,48 @@ class AmazonScraper(BaseScraper):
     _TITLE_SELECTOR = "#productTitle"
     _AVAILABILITY_SELECTOR = "#availability span"
 
+    # A locator timeout for calls made *after* _wait_for_content has already
+    # given the page a chance to load. If the content isn't there by then,
+    # waiting another full default timeout (30s) per call just wastes time
+    # across 3 retries x N products.
+    _FAST_TIMEOUT_MS = 5000
+
     async def _wait_for_content(self, page: Page) -> None:
         try:
             await page.wait_for_selector(self._TITLE_SELECTOR, timeout=10000)
+            return
         except Exception:
             # Page may still be usable (e.g. captcha, layout variant); let
             # the individual extractors fail gracefully instead of aborting.
             logger.warning("Amazon title selector did not appear in time")
 
+        await self._try_dismiss_interstitial(page)
+
+    async def _try_dismiss_interstitial(self, page: Page) -> None:
+        """Click through Amazon's "Click the button below to continue
+        shopping" page if present. It's a plain click-through, not a
+        CAPTCHA, so it's worth one attempt before giving up on this page.
+        """
+        try:
+            continue_button = page.get_by_role(
+                "button", name=re.compile("continue shopping", re.IGNORECASE)
+            )
+            if await continue_button.count() == 0:
+                return
+            logger.info("Amazon interstitial detected; attempting to click through")
+            await continue_button.first.click(timeout=self._FAST_TIMEOUT_MS)
+            await page.wait_for_selector(self._TITLE_SELECTOR, timeout=10000)
+        except Exception:
+            logger.warning("Amazon interstitial click-through did not reveal product content")
+
     async def _extract_title(self, page: Page) -> str:
         try:
-            text = await page.locator(self._TITLE_SELECTOR).first.text_content()
+            text = await page.locator(self._TITLE_SELECTOR).first.text_content(
+                timeout=self._FAST_TIMEOUT_MS
+            )
             return text.strip() if text else "Unknown product"
         except Exception:
-            logger.warning("Failed to extract Amazon title", exc_info=True)
+            logger.warning("Failed to extract Amazon title")
             return "Unknown product"
 
     async def _extract_price(self, page: Page) -> Optional[float]:
@@ -52,7 +80,7 @@ class AmazonScraper(BaseScraper):
                 locator = page.locator(selector).first
                 if await locator.count() == 0:
                     continue
-                text = await locator.text_content()
+                text = await locator.text_content(timeout=self._FAST_TIMEOUT_MS)
                 price = self._parse_price(text)
                 if price is not None:
                     return price
@@ -68,7 +96,7 @@ class AmazonScraper(BaseScraper):
                 # No availability banner usually means the buy box (and
                 # therefore the product) is available.
                 return True
-            text = (await locator.text_content() or "").strip().lower()
+            text = (await locator.text_content(timeout=self._FAST_TIMEOUT_MS) or "").strip().lower()
             return "unavailable" not in text and "out of stock" not in text
         except Exception:
             return True

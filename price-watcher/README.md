@@ -112,6 +112,28 @@ Run it on a schedule (e.g. a Railway cron job, plain cron, or Task
 Scheduler) to get ongoing alerts. `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`
 should be set as environment variables/secrets on whatever platform runs it.
 
+## Deploying to Railway
+
+This repo includes a `Dockerfile` based on the official
+`mcr.microsoft.com/playwright/python` image, which already bundles Chromium
+and its OS dependencies matched to the pinned `playwright` version in
+`requirements.txt`. Railway auto-detects the `Dockerfile` and builds from
+it, so no extra Nixpacks/build configuration is needed.
+
+1. In the Railway service settings, set the **Root Directory** to
+   `price-watcher` (this subfolder), since that's where the `Dockerfile`
+   and app code live.
+2. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` as environment variables
+   on the Railway service.
+3. Set a **Cron Schedule** on the service (Railway's Settings tab) so it
+   runs `python tracker.py` periodically instead of staying up as a
+   long-lived process.
+4. Amazon/Flipkart aggressively rate-limit and bot-check traffic from
+   datacenter IPs, which is what most cloud hosts (including Railway) use.
+   If a run's logs show empty prices or repeated retries, check whether the
+   page returned a bot-check/captcha page instead of the real product page
+   before assuming the CSS selectors are wrong.
+
 ## Adding a new marketplace
 
 1. Create `scrapers/<marketplace>.py` with a class that subclasses

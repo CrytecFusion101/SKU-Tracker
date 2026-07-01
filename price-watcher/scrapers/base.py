@@ -10,6 +10,14 @@ from playwright.async_api import Page
 logger = logging.getLogger(__name__)
 
 
+class ScrapeError(Exception):
+    """Raised when a scrape didn't yield usable data (blocked, layout change,
+    slow page, etc). Callers should treat this like any other scrape failure
+    -- it's what makes retry_with_backoff actually retry instead of the
+    tracker silently persisting a price of None as if it were real data.
+    """
+
+
 @dataclass
 class ScrapedProduct:
     """Normalized result every scraper implementation returns to the tracker."""
@@ -38,12 +46,20 @@ class BaseScraper(ABC):
 
     async def scrape(self, page: Page, url: str) -> ScrapedProduct:
         """Navigate to the product URL and return normalized product data."""
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
         await self._wait_for_content(page)
 
         title = await self._extract_title(page)
         price = await self._extract_price(page)
         in_stock = await self._extract_availability(page)
+
+        if price is None:
+            # A missing price almost always means the page was blocked,
+            # redirected to a captcha, or its layout changed -- not that the
+            # product is genuinely priceless. Treat it as a failed scrape so
+            # retry_with_backoff retries and the tracker skips persisting
+            # this result, rather than committing junk to state.json.
+            raise ScrapeError(f"{self.marketplace_name}: could not extract a price from {url}")
 
         return ScrapedProduct(title=title, price=price, in_stock=in_stock)
 

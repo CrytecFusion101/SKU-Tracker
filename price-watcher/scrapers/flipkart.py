@@ -34,8 +34,11 @@ class FlipkartScraper(BaseScraper):
     # A product's price stays visible on Flipkart even when it can't be
     # bought right now (e.g. "NOTIFY ME" instead of a real out-of-stock
     # message), so treat availability as "can this actually be purchased"
-    # rather than trying to enumerate every unavailability message.
-    _BUY_BUTTON_PATTERN = re.compile(r"add to cart|buy now", re.IGNORECASE)
+    # rather than trying to enumerate every unavailability message. Matched
+    # as plain text (not role="button") since Flipkart's CTAs are commonly
+    # styled divs/spans rather than semantic <button> elements.
+    _BUY_CTA_PATTERN = re.compile(r"add to cart|buy now", re.IGNORECASE)
+    _ANY_CTA_PATTERN = re.compile(r"add to cart|buy now|notify me", re.IGNORECASE)
 
     # Timeout for calls made after _wait_for_content already gave the page
     # a chance to settle -- avoids stacking another full default timeout
@@ -109,8 +112,16 @@ class FlipkartScraper(BaseScraper):
 
     async def _extract_availability(self, page: Page) -> bool:
         try:
-            buy_button = page.get_by_role("button", name=self._BUY_BUTTON_PATTERN)
-            return await buy_button.count() > 0
+            # The buy/notify CTA can hydrate in after the price does, so give
+            # it its own explicit wait rather than assuming it's already
+            # present just because _wait_for_content's price wait finished.
+            try:
+                await page.get_by_text(self._ANY_CTA_PATTERN).first.wait_for(timeout=8000)
+            except Exception:
+                logger.warning("Flipkart buy/notify CTA did not appear in time")
+
+            buy_cta = page.get_by_text(self._BUY_CTA_PATTERN)
+            return await buy_cta.count() > 0
         except Exception:
             logger.warning("Could not determine Flipkart buy-button availability")
             return True

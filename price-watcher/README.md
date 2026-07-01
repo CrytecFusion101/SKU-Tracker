@@ -1,4 +1,4 @@
-# Price Watcher
+# CrawleyBOT
 
 Tracks prices for Amazon India and Flipkart product URLs and sends a
 Telegram notification whenever the price changes, stock status changes, or

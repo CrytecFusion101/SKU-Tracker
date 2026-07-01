@@ -115,7 +115,7 @@ class TelegramNotifier:
 
     def _format_daily_summary(self, events: List[PriceEvent]) -> str:
         """Build the once-a-day digest: current price/availability per product."""
-        lines = ["📊 <b>Price Watcher — Daily Summary</b>", ""]
+        lines = ["📊 <b>CrawleyBOT — Daily Summary</b>", ""]
 
         for event in events:
             stock_emoji = "🟢" if event.new_in_stock else "🔴"

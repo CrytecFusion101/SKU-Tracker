@@ -1,36 +1,87 @@
 from __future__ import annotations
 
+import logging
 import re
-from typing import Any
+from typing import Optional
 
-import requests
-from bs4 import BeautifulSoup
+from playwright.async_api import Page
 
 from .base import BaseScraper
 
+logger = logging.getLogger(__name__)
+
 
 class AmazonScraper(BaseScraper):
-    def get_name(self) -> str:
-        return "amazon"
+    """Scraper for Amazon India (and .com) product pages."""
 
-    def fetch_price(self, product_url: str) -> float:
-        response = requests.get(product_url, timeout=15, headers={
-            "User-Agent": "Mozilla/5.0"
-        })
-        response.raise_for_status()
+    marketplace_name = "Amazon"
+    domains = ("amazon.in", "amazon.com")
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        price_text = None
+    # Amazon renders the price in different DOM shapes depending on deal
+    # type (buy box, lightning deal, coupon, etc). Selectors are tried in
+    # order and the first match wins.
+    _PRICE_SELECTORS = (
+        "span.a-price .a-offscreen",
+        "#priceblock_ourprice",
+        "#priceblock_dealprice",
+        "#priceblock_saleprice",
+        ".a-price-whole",
+    )
+    _TITLE_SELECTOR = "#productTitle"
+    _AVAILABILITY_SELECTOR = "#availability span"
 
-        for candidate in soup.select("span.a-price .a-offscreen"):
-            price_text = candidate.get_text(strip=True)
-            break
+    async def _wait_for_content(self, page: Page) -> None:
+        try:
+            await page.wait_for_selector(self._TITLE_SELECTOR, timeout=10000)
+        except Exception:
+            # Page may still be usable (e.g. captcha, layout variant); let
+            # the individual extractors fail gracefully instead of aborting.
+            logger.warning("Amazon title selector did not appear in time")
 
-        if not price_text:
-            raise ValueError("Could not find Amazon price")
+    async def _extract_title(self, page: Page) -> str:
+        try:
+            text = await page.locator(self._TITLE_SELECTOR).first.text_content()
+            return text.strip() if text else "Unknown product"
+        except Exception:
+            logger.warning("Failed to extract Amazon title", exc_info=True)
+            return "Unknown product"
 
-        match = re.search(r"([0-9,]+(?:\.[0-9]+)?)", price_text)
+    async def _extract_price(self, page: Page) -> Optional[float]:
+        for selector in self._PRICE_SELECTORS:
+            try:
+                locator = page.locator(selector).first
+                if await locator.count() == 0:
+                    continue
+                text = await locator.text_content()
+                price = self._parse_price(text)
+                if price is not None:
+                    return price
+            except Exception:
+                continue
+        logger.warning("Could not locate a price element on Amazon page")
+        return None
+
+    async def _extract_availability(self, page: Page) -> bool:
+        try:
+            locator = page.locator(self._AVAILABILITY_SELECTOR).first
+            if await locator.count() == 0:
+                # No availability banner usually means the buy box (and
+                # therefore the product) is available.
+                return True
+            text = (await locator.text_content() or "").strip().lower()
+            return "unavailable" not in text and "out of stock" not in text
+        except Exception:
+            return True
+
+    @staticmethod
+    def _parse_price(text: Optional[str]) -> Optional[float]:
+        """Extract a float from strings like '₹1,299.00'."""
+        if not text:
+            return None
+        match = re.search(r"[\d,]+(?:\.\d+)?", text)
         if not match:
-            raise ValueError("Could not parse Amazon price")
-
-        return float(match.group(1).replace(",", ""))
+            return None
+        try:
+            return float(match.group(0).replace(",", ""))
+        except ValueError:
+            return None

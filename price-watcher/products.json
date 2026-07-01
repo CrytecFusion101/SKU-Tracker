@@ -1,12 +1,12 @@
 [
   {
-    "sku": "demo-1",
-    "store": "amazon",
-    "url": "https://www.amazon.in"
+    "name": "Example Amazon Product",
+    "url": "https://www.amazon.in/dp/B0EXAMPLE",
+    "target_price": null
   },
   {
-    "sku": "demo-2",
-    "store": "flipkart",
-    "url": "https://www.flipkart.com"
+    "name": "Example Flipkart Product",
+    "url": "https://www.flipkart.com/example-product/p/itmexample",
+    "target_price": 1999
   }
 ]

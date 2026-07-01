@@ -4,13 +4,15 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 from playwright.async_api import Page, async_playwright
 
-from notifier import PriceChangeEvent, TelegramNotifier
-from scrapers import ScrapedProduct, get_scraper_for_url
+from events import build_price_event
+from notifier import TelegramNotifier
+from scrapers import BaseScraper, ScrapedProduct, get_scraper_for_url
+from state_store import StateStore
 from utils import retry_with_backoff
 
 load_dotenv()
@@ -38,29 +40,8 @@ def load_products() -> List[Dict[str, Any]]:
         return json.load(handle)
 
 
-def load_state() -> Dict[str, Any]:
-    """Load previously recorded product state from state.json."""
-    if not STATE_FILE.exists():
-        return {}
-    with STATE_FILE.open("r", encoding="utf-8") as handle:
-        try:
-            return json.load(handle)
-        except json.JSONDecodeError:
-            logger.warning("state.json contains invalid JSON; starting fresh")
-            return {}
-
-
-def save_state(state: Dict[str, Any]) -> None:
-    """Persist the latest known product state to state.json."""
-    with STATE_FILE.open("w", encoding="utf-8") as handle:
-        json.dump(state, handle, indent=2)
-
-
-async def scrape_product(page: Page, url: str) -> ScrapedProduct:
-    """Detect the marketplace for a URL and scrape it, retrying on failure."""
-    scraper = get_scraper_for_url(url)
-    if scraper is None:
-        raise ValueError(f"No scraper registered for URL: {url}")
+async def scrape_with_retry(scraper: BaseScraper, page: Page, url: str) -> ScrapedProduct:
+    """Run a scraper's scrape() with exponential-backoff retries."""
 
     async def attempt() -> ScrapedProduct:
         return await scraper.scrape(page, url)
@@ -73,90 +54,64 @@ async def scrape_product(page: Page, url: str) -> ScrapedProduct:
     )
 
 
-def has_meaningful_change(
-    previous: Optional[Dict[str, Any]],
-    current: ScrapedProduct,
-    target_price: Optional[float],
-) -> bool:
-    """Decide whether the new scrape differs enough from history to notify.
-
-    Triggers on a price change, a stock-status change, or the price
-    crossing at or below the user's target for the first time. A first-ever
-    scrape (no previous state) only records a baseline; it never notifies.
-    """
-    if previous is None:
-        return False
-
-    price_changed = previous.get("price") != current.price
-    stock_changed = previous.get("in_stock") != current.in_stock
-
-    previously_reached = (
-        target_price is not None
-        and previous.get("price") is not None
-        and previous.get("price") <= target_price
-    )
-    newly_reached = (
-        target_price is not None
-        and current.price is not None
-        and current.price <= target_price
-        and not previously_reached
-    )
-
-    return price_changed or stock_changed or newly_reached
-
-
 async def process_product(
     page: Page,
     product: Dict[str, Any],
-    state: Dict[str, Any],
+    state_store: StateStore,
     notifier: TelegramNotifier,
 ) -> None:
-    """Scrape one product, compare it against stored state, and notify on change."""
+    """Run one product through the pipeline:
+
+    Marketplace Resolver -> Scraper -> Price Event -> Notifier -> State Store
+    """
     url = product["url"]
     name = product.get("name") or url
     target_price = product.get("target_price")
 
+    # Marketplace Resolver
+    scraper = get_scraper_for_url(url)
+    if scraper is None:
+        logger.warning("No scraper registered for URL: %s", url)
+        return
+
+    # Scraper
     try:
-        current = await scrape_product(page, url)
+        scraped = await scrape_with_retry(scraper, page, url)
     except Exception:
         logger.exception("Giving up on '%s' after %d attempts", name, RETRY_ATTEMPTS)
         return
 
-    previous = state.get(url)
+    # Price Event
+    event = build_price_event(
+        product_name=name,
+        url=url,
+        marketplace=scraper.marketplace_name,
+        target_price=target_price,
+        previous=state_store.get(url),
+        scraped=scraped,
+    )
 
-    if has_meaningful_change(previous, current, target_price):
-        scraper = get_scraper_for_url(url)
-        event = PriceChangeEvent(
-            name=name,
-            marketplace=scraper.marketplace_name if scraper else "Unknown",
-            url=url,
-            old_price=previous.get("price") if previous else None,
-            new_price=current.price,
-            old_in_stock=previous.get("in_stock") if previous else None,
-            new_in_stock=current.in_stock,
-            target_price=target_price,
-        )
-        await notifier.notify(event)
-        logger.info("Change detected for '%s' -> notification sent", name)
-    else:
-        logger.info("No significant change for '%s' (price=%s)", name, current.price)
+    # Notifier (decides internally whether the event warrants an alert)
+    await notifier.handle(event)
 
-    state[url] = {
-        "name": name,
-        "title": current.title,
-        "price": current.price,
-        "in_stock": current.in_stock,
-    }
+    # State Store
+    state_store.update(
+        url,
+        name=name,
+        title=scraped.title,
+        price=scraped.price,
+        in_stock=scraped.in_stock,
+    )
 
 
 async def track_prices() -> None:
-    """Entry point: scrape every tracked product and notify on any change."""
+    """Entry point: load products and run every one through the pipeline."""
     products = load_products()
     if not products:
         logger.info("No products configured in products.json; nothing to do")
         return
 
-    state = load_state()
+    state_store = StateStore(STATE_FILE)
     notifier = TelegramNotifier()
     if not notifier.is_configured:
         logger.warning(
@@ -179,12 +134,12 @@ async def track_prices() -> None:
             # traffic to each marketplace low and avoid tripping bot
             # detection. This is a deliberate tradeoff of speed for reliability.
             for product in products:
-                await process_product(page, product, state, notifier)
+                await process_product(page, product, state_store, notifier)
         finally:
             await context.close()
             await browser.close()
 
-    save_state(state)
+    state_store.save()
     logger.info("Tracking run complete (%d product(s) processed)", len(products))
 
 

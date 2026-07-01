@@ -6,16 +6,54 @@ a product hits its target price.
 
 ## How it works
 
+Every product flows through the same pipeline, one stage at a time:
+
+```
+Load products
+      │
+      ▼
+Marketplace Resolver   (scrapers/__init__.py: get_scraper_for_url)
+      │
+      ▼
+Scraper                (scrapers/amazon.py, scrapers/flipkart.py)
+      │
+      ▼
+Price Event            (events.py: build_price_event)
+      │
+      ▼
+Notifier                (notifier.py: TelegramNotifier.handle)
+      │
+      ▼
+State Store             (state_store.py)
+```
+
 1. `tracker.py` loads the list of products from `products.json`.
-2. For each product, the marketplace is auto-detected from the URL's
-   hostname (`scrapers/__init__.py`), and the matching scraper is used.
-3. Each scraper drives a headless Chromium instance via async Playwright to
+2. **Marketplace Resolver** — the product URL's hostname picks the matching
+   scraper (`scrapers/__init__.py`).
+3. **Scraper** — drives a headless Chromium instance via async Playwright to
    read the product title, price, and availability. Scrapes are retried up
    to 3 times with exponential backoff (2s, 4s, 8s) on failure.
-4. The result is compared against the last known value in `state.json`.
-5. If the price changed, stock status changed, or the target price was
-   reached, a formatted message is sent to a Telegram chat.
-6. `state.json` is updated with the latest values for next run.
+4. **Price Event** — the scrape result is diffed against the last known
+   value in `state.json` and turned into a `PriceEvent` (`events.py`):
+   ```python
+   PriceEvent(
+       product="Sony XM6",
+       marketplace="Amazon",
+       old_price=29990,
+       new_price=27999,
+       changed=True,
+       target_hit=True,
+       ...
+   )
+   ```
+   Every scrape produces a `PriceEvent`, whether or not anything changed —
+   the event itself carries `changed`/`target_hit` flags rather than the
+   tracker deciding upfront what's notification-worthy.
+5. **Notifier** — receives the `PriceEvent` and decides for itself whether
+   to alert (`event.changed or event.target_hit`). If so, it formats and
+   sends a Telegram message.
+6. **State Store** — `state_store.py` records the latest scrape result for
+   next run, independent of whether the notifier fired.
 
 ## Project structure
 
@@ -24,9 +62,11 @@ scrapers/
     base.py       # BaseScraper interface + ScrapedProduct result type
     amazon.py     # Amazon-specific selectors and parsing
     flipkart.py   # Flipkart-specific selectors and parsing
-    __init__.py   # Scraper registry + URL -> scraper auto-detection
-tracker.py        # Orchestration: load, scrape, compare, notify, persist
-notifier.py       # Telegram message formatting and delivery
+    __init__.py   # Scraper registry + URL -> scraper auto-detection (resolver)
+events.py         # PriceEvent + build_price_event (diffs a scrape into an event)
+state_store.py    # StateStore: reads/writes state.json
+notifier.py       # TelegramNotifier: decides to alert, formats, and sends
+tracker.py        # Orchestration: wires the pipeline stages together per product
 utils.py          # Generic async retry-with-backoff helper
 products.json     # User-supplied list of products to track
 state.json        # Last known price/availability per product (auto-managed)
@@ -68,8 +108,9 @@ state.json        # Last known price/availability per product (auto-managed)
    python tracker.py
    ```
 
-Run it on a schedule (cron, Task Scheduler, or the included GitHub Actions
-workflow at `.github/workflows/watcher.yml`) to get ongoing alerts.
+Run it on a schedule (e.g. a Railway cron job, plain cron, or Task
+Scheduler) to get ongoing alerts. `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`
+should be set as environment variables/secrets on whatever platform runs it.
 
 ## Adding a new marketplace
 

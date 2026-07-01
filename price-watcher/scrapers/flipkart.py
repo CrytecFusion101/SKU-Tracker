@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from playwright.async_api import Page
 
@@ -115,6 +116,15 @@ class FlipkartScraper(BaseScraper):
             except Exception:
                 continue
         return True
+
+    def shorten_url(self, url: str) -> str:
+        """Keep the path plus `pid` (it selects the specific color/storage
+        variant) but drop tracking-only params like lid/marketplace/fm.
+        """
+        parsed = urlparse(url)
+        pid = parse_qs(parsed.query).get("pid", [None])[0]
+        base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        return f"{base}?pid={pid}" if pid else base
 
     @staticmethod
     def _parse_price(text: Optional[str]) -> Optional[float]:

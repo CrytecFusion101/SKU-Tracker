@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Optional
+from urllib.parse import urlparse
 
 from playwright.async_api import Page
 
@@ -91,15 +92,33 @@ class AmazonScraper(BaseScraper):
 
     async def _extract_availability(self, page: Page) -> bool:
         try:
-            locator = page.locator(self._AVAILABILITY_SELECTOR).first
-            if await locator.count() == 0:
+            locator = page.locator(self._AVAILABILITY_SELECTOR)
+            count = await locator.count()
+            if count == 0:
                 # No availability banner usually means the buy box (and
                 # therefore the product) is available.
                 return True
-            text = (await locator.text_content(timeout=self._FAST_TIMEOUT_MS) or "").strip().lower()
-            return "unavailable" not in text and "out of stock" not in text
+
+            # Amazon renders several spans in this block and several are
+            # routinely empty -- the actual "Currently unavailable" message
+            # can land in any of them, so .first alone is not reliable.
+            # Check the combined text of all of them instead.
+            combined = ""
+            for i in range(count):
+                text = await locator.nth(i).text_content(timeout=self._FAST_TIMEOUT_MS)
+                combined += (text or "") + " "
+            combined = combined.strip().lower()
+            return "unavailable" not in combined and "out of stock" not in combined
         except Exception:
             return True
+
+    def shorten_url(self, url: str) -> str:
+        """Reduce to https://<host>/dp/<ASIN>, dropping tracking query params."""
+        match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", url)
+        if match:
+            host = urlparse(url).netloc
+            return f"https://{host}/dp/{match.group(1)}"
+        return super().shorten_url(url)
 
     @staticmethod
     def _parse_price(text: Optional[str]) -> Optional[float]:

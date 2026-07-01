@@ -4,6 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 from playwright.async_api import Page
 
@@ -50,19 +51,35 @@ class BaseScraper(ABC):
         await self._wait_for_content(page)
 
         title = await self._extract_title(page)
-        price = await self._extract_price(page)
         in_stock = await self._extract_availability(page)
 
-        if price is None:
-            # A missing price almost always means the page was blocked,
-            # redirected to a captcha, or its layout changed -- not that the
-            # product is genuinely priceless. Treat it as a failed scrape so
+        # Genuinely out-of-stock listings often show no buybox price at all,
+        # so don't even look for one -- any match found by a generic price
+        # selector at that point is almost certainly noise from an unrelated
+        # recommendation/carousel widget elsewhere on the page, not this
+        # product's price.
+        price = await self._extract_price(page) if in_stock else None
+
+        if price is None and in_stock:
+            # Missing price while the page claims the product is in stock is
+            # suspicious -- likely a blocked/bot-check page or a layout
+            # change, not a genuine data gap. Treat it as a failed scrape so
             # retry_with_backoff retries and the tracker skips persisting
             # this result, rather than committing junk to state.json.
             await self._log_page_diagnostics(page, url)
             raise ScrapeError(f"{self.marketplace_name}: could not extract a price from {url}")
 
         return ScrapedProduct(title=title, price=price, in_stock=in_stock)
+
+    def shorten_url(self, url: str) -> str:
+        """Return a short, display-friendly version of a product URL for use
+        in notifications. The default strips query params/fragment, keeping
+        just the path -- marketplaces whose path alone isn't a stable link
+        (e.g. one that depends on a query param to pick a specific variant)
+        should override this.
+        """
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
 
     async def _wait_for_content(self, page: Page) -> None:
         """Optional hook subclasses can override to wait for dynamic content."""

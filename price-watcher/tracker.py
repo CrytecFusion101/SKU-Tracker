@@ -95,10 +95,11 @@ async def process_product(
         name, scraper.marketplace_name, scraped.price, scraped.in_stock, scraped.title,
     )
 
-    # Price Event
+    # Price Event (uses a shortened display URL -- state_store below still
+    # keys off the full raw `url` so product identity/lookups are unaffected)
     event = build_price_event(
         product_name=name,
-        url=url,
+        url=scraper.shorten_url(url),
         marketplace=scraper.marketplace_name,
         target_price=target_price,
         previous=state_store.get(url),

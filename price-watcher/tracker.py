@@ -23,6 +23,7 @@ STATE_FILE = BASE_DIR / "state.json"
 
 RETRY_ATTEMPTS = 3
 RETRY_BASE_DELAY_SECONDS = 2.0
+DELAY_BETWEEN_PRODUCTS_SECONDS = 5.0
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,10 +152,14 @@ async def track_prices() -> None:
         page = await context.new_page()
 
         try:
-            # Products are scraped one at a time on a shared page to keep
-            # traffic to each marketplace low and avoid tripping bot
-            # detection. This is a deliberate tradeoff of speed for reliability.
-            for product in products:
+            # Products are scraped one at a time on a shared page, with a
+            # pause between each, to keep traffic to each marketplace low.
+            # Bursting straight through several product URLs in a row is
+            # exactly what tripped Flipkart's rate-based IP block during
+            # testing -- spacing requests out is cheap insurance against it.
+            for index, product in enumerate(products):
+                if index > 0:
+                    await asyncio.sleep(DELAY_BETWEEN_PRODUCTS_SECONDS)
                 await process_product(page, product, state_store, notifier)
         finally:
             await context.close()

@@ -34,6 +34,23 @@ class FlipkartScraper(BaseScraper):
         "div.Z8JjpR",
     )
 
+    # Timeout for calls made after _wait_for_content already gave the page
+    # a chance to settle -- avoids stacking another full default timeout
+    # (30s) on top per call across 3 retries x N products.
+    _FAST_TIMEOUT_MS = 5000
+
+    # Flipkart's <title> tag reliably contains the product name even when
+    # the on-page CSS classes are rotated, just with a boilerplate suffix.
+    _TITLE_SUFFIX_PATTERN = re.compile(
+        r"\s*(Online at Best Price(?: On Flipkart\.com)?|Price in India.*)\s*$",
+        re.IGNORECASE,
+    )
+
+    # Fallback when none of _PRICE_SELECTORS match: Flipkart's variant
+    # selector widget renders plain text like "256 GB ↓8% 82,900 ₹75,900"
+    # for the currently selected variant, regardless of CSS class rotation.
+    _VARIANT_PRICE_PATTERN = re.compile(r"↓\s*\d+%\s*[\d,]+\s*₹\s*([\d,]+)")
+
     async def _wait_for_content(self, page: Page) -> None:
         try:
             await page.wait_for_selector(",".join(self._PRICE_SELECTORS), timeout=10000)
@@ -46,11 +63,20 @@ class FlipkartScraper(BaseScraper):
                 locator = page.locator(selector).first
                 if await locator.count() == 0:
                     continue
-                text = await locator.text_content()
+                text = await locator.text_content(timeout=self._FAST_TIMEOUT_MS)
                 if text and text.strip():
                     return text.strip()
             except Exception:
                 continue
+
+        try:
+            page_title = await page.title()
+            cleaned = self._TITLE_SUFFIX_PATTERN.sub("", page_title).strip()
+            if cleaned:
+                return cleaned
+        except Exception:
+            pass
+
         logger.warning("Failed to extract Flipkart title")
         return "Unknown product"
 
@@ -60,12 +86,21 @@ class FlipkartScraper(BaseScraper):
                 locator = page.locator(selector).first
                 if await locator.count() == 0:
                     continue
-                text = await locator.text_content()
+                text = await locator.text_content(timeout=self._FAST_TIMEOUT_MS)
                 price = self._parse_price(text)
                 if price is not None:
                     return price
             except Exception:
                 continue
+
+        try:
+            body_text = await page.locator("body").inner_text(timeout=self._FAST_TIMEOUT_MS)
+            match = self._VARIANT_PRICE_PATTERN.search(body_text)
+            if match:
+                return float(match.group(1).replace(",", ""))
+        except Exception:
+            pass
+
         logger.warning("Could not locate a price element on Flipkart page")
         return None
 
@@ -74,7 +109,7 @@ class FlipkartScraper(BaseScraper):
             try:
                 locator = page.locator(selector).first
                 if await locator.count() > 0:
-                    text = (await locator.text_content() or "").strip().lower()
+                    text = (await locator.text_content(timeout=self._FAST_TIMEOUT_MS) or "").strip().lower()
                     if "sold out" in text or "out of stock" in text or "coming soon" in text:
                         return False
             except Exception:

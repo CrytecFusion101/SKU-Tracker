@@ -15,11 +15,6 @@
     "target_price": null
   },
   {
-    "name": "iPhone 17 (Lavender)",
-    "url": "https://www.flipkart.com/apple-iphone-17-lavender-256-gb/p/itmf37c8dffa4165?pid=MOBHFN6YKGBPYJZD&marketplace=FLIPKART&lid=LSTMOBHFN6YKGBPYJZDEZPBYP&pageUID=1782273214569",
-    "target_price": null
-  },
-  {
     "name": "iPhone 17 (Black)",
     "url": "https://www.flipkart.com/apple-iphone-17-black-256-gb/p/itm6eb39da622cdd?pid=MOBHFN6YN2HXB5HE&marketplace=FLIPKART&lid=LSTMOBHFN6YN2HXB5HER9QXGU&pageUID=1782273214569",
     "target_price": null
@@ -27,11 +22,6 @@
   {
     "name": "iPhone 17 Air (Gold)",
     "url": "https://www.flipkart.com/apple-iphone-air-light-gold-256-gb/p/itm4767171283822?pid=MOBHFN6YKZXACH9V&marketplace=FLIPKART&lid=LSTMOBHFN6YKZXACH9V5N9999&fm=eyJ3dHAiOiJyZWNvIiwicHJwdCI6InBwIiwibWlkIjoicHJvZHVjdFJlY29tbWVuZGF0aW9uL3NpbWlsYXIifQ%3D%3D&pageUID=1782898318752",
-    "target_price": 90000
-  },
-  {
-    "name": "iPhone 17 Air (Blue)",
-    "url": "https://www.flipkart.com/apple-iphone-air-sky-blue-256-gb/p/itmc3f8087a2b960?pid=MOBHFN6YZ4TZ55AG&marketplace=FLIPKART&lid=LSTMOBHFN6YZ4TZ55AGRLDFZV&fm=eyJ3dHAiOiJyZWNvIiwicHJwdCI6InBwIiwibWlkIjoicHJvZHVjdFJlY29tbWVuZGF0aW9uL3NpbWlsYXIifQ%3D%3D&pageUID=1782898318752",
     "target_price": 90000
   }
 ]
